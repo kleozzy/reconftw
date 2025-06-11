@@ -4788,7 +4788,11 @@ function smuggling() {
 			fi
 
 			# Run smuggler.py on the list of URLs
-			python3 "smuggler.py" -f "$dir/webs/webs_all.txt" -o "$dir/.tmp/smuggling.txt" 2>>"$LOGFILE" >/dev/null
+			> "$dir/.tmp/smuggling.txt"
+
+			while IFS= read -r url; do
+				python3 "smuggler.py" -q -u "$url" >> "$dir/.tmp/smuggling.txt" 2>>"$LOGFILE"
+			done <"$dir/webs/webs_all.txt"
 
 			# Move payload files to vulns/smuggling/
 			find "payloads" -type f ! -name "README*" -exec mv {} "$dir/vulns/smuggling/" \;
@@ -4858,7 +4862,7 @@ function webcache() {
 			fi
 
 			# Run the Web-Cache-Vulnerability-Scanner
-			./Web-Cache-Vulnerability-Scanner -u "file:$dir/webs/webs_all.txt" -v 0 2>>"$LOGFILE" |
+			Web-Cache-Vulnerability-Scanner -u "file:$dir/webs/webs_all.txt" -v 0 2>>"$LOGFILE" |
 				anew -q "$dir/.tmp/webcache.txt"
 
 			# Return to the original directory
