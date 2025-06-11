@@ -1357,7 +1357,7 @@ function sub_scraping() {
 			subdomains_count=$(wc -l <"$dir/subdomains/subdomains.txt")
 			if [[ $subdomains_count -le $DEEP_LIMIT ]] || [[ $DEEP == true ]]; then
 
-				urlfinder -d $domain -all -o .tmp/url_extract_tmp.txt 2>>"$LOGFILE" >/dev/null
+				urlfinder -d $dir/subdomains/subdomains.txt -all -o .tmp/url_extract_tmp.txt 2>>"$LOGFILE" >/dev/null
 
 				if [[ -s ".tmp/url_extract_tmp.txt" ]]; then
 					cat .tmp/url_extract_tmp.txt | grep "$domain" |
@@ -3547,8 +3547,15 @@ function urlchecks() {
 
 				end_func "Results are saved in $domain/webs/url_extract.txt" "${FUNCNAME[0]}"
 
-				p1radup -i webs/url_extract.txt -o webs/url_extract_nodupes.txt -s 2>>"$LOGFILE" >/dev/null
-
+				
+				mv -f .tmp/url_extract_js.txt       webs/url_extract_js.txt        2>/dev/null || :
+  			    mv -f .tmp/url_extract_jsmap.txt    webs/url_extract_jsmap.txt     2>/dev/null || :
+                mv -f .tmp/url_extract_tmp2.txt     webs/url_extract_tmp2.txt      2>/dev/null || :
+                mv -f .tmp/url_extract_uddup.txt    webs/url_extract_uddup.txt     2>/dev/null || :
+                mv -f webs/url_extract_nodupes.txt  webs/url_extract_nodupes.txt   2>/dev/null || touch webs/url_extract_nodupes.txt
+				> webs/url_extract_nodupes.txt
+				cat subdomains/subdomains.txt webs/webs_all.txt webs/url_extract.txt webs/urls_by_ext.txt webs/url_extract_js.txt | anew -q webs/url_extract_nodupes.txt
+				p1radup -i webs/url_extract_nodupes.txt -o webs/webs_nuclei_nodupes.txt -s 2>>"$LOGFILE" >/dev/null
 				if [[ $PROXY == true ]] && [[ -n $proxy_url ]] && [[ $(wc -l <webs/url_extract.txt) -le $DEEP_LIMIT2 ]]; then
 					notification "Sending URLs to proxy" "info"
 					ffuf -mc all -w webs/url_extract.txt -u FUZZ -replay-proxy "$proxy_url" 2>>"$LOGFILE" >/dev/null
@@ -3581,8 +3588,8 @@ function url_gf() {
 
 		start_func "${FUNCNAME[0]}" "Vulnerable Pattern Search"
 
-		# Ensure webs_nuclei.txt exists and is not empty
-		if [[ -s "webs/webs_nuclei.txt" ]]; then
+		# Ensure url_extract_nodupes.txt exists and is not empty
+		if [[ -s "webs/url_extract_nodupes.txt" ]]; then
 			# Define an array of GF patterns
 			declare -A gf_patterns=(
 				["xss"]="gf/xss.txt"
@@ -3591,8 +3598,8 @@ function url_gf() {
 				["sqli"]="gf/sqli.txt"
 				["redirect"]="gf/redirect.txt"
 				["rce"]="gf/rce.txt"
-				["potential"]="gf/potential.txt"
 				["lfi"]="gf/lfi.txt"
+				["cmdi"]="gf/cmdi.txt"
 			)
 
 			# Iterate over GF patterns and process each
@@ -3601,13 +3608,13 @@ function url_gf() {
 				printf "${yellow}\n[$(date +'%Y-%m-%d %H:%M:%S')] Running: GF Pattern '$pattern'${reset}\n\n"
 				if [[ $pattern == "potential" ]]; then
 					# Special handling for 'potential' pattern
-					gf "$pattern" "webs/webs_nuclei.txt" | cut -d ':' -f3-5 | anew -q "$output_file"
+					gf "$pattern" "webs/url_extract_nodupes.txt" | cut -d ':' -f3-5 | anew -q "$output_file"
 				elif [[ $pattern == "redirect" && -s "gf/ssrf.txt" ]]; then
 					# Append SSFR results to redirect if ssrf.txt exists
-					gf "$pattern" "webs/webs_nuclei.txt" | anew -q "$output_file"
+					gf "$pattern" "webs/url_extract_nodupes.txt" | anew -q "$output_file"
 				else
 					# General handling for other patterns
-					gf "$pattern" "webs/webs_nuclei.txt" | anew -q "$output_file"
+					gf "$pattern" "webs/url_extract_nodupes.txt" | anew -q "$output_file"
 				fi
 			done
 
@@ -3619,7 +3626,7 @@ function url_gf() {
 			fi
 
 		else
-			end_func "No webs/webs_nuclei.txt file found, URL_GF check skipped." "${FUNCNAME[0]}"
+			end_func "No webs/url_extract_nodupes.txt file found, URL_GF check skipped." "${FUNCNAME[0]}"
 			return
 		fi
 
@@ -3711,6 +3718,10 @@ function jschecks() {
 	# Check if the function should run
 	if { [[ ! -f "$called_fn_dir/.${FUNCNAME[0]}" ]] || [[ $DIFF == true ]]; } && [[ $JSCHECKS == true ]]; then
 		start_func "${FUNCNAME[0]}" "JavaScript Scan"
+		> .tmp/url_extract_js.txt
+		if [[ -s "webs/url_extract.txt" ]]; then
+			cat webs/url_extract.txt | anew -q .tmp/url_extract_js.txt
+		fi
 
 		[[ ! -s ".tmp/url_extract_js.txt" ]] && cat js/url_extract_js.txt | anew -q .tmp/url_extract_js.txt
 
@@ -3794,7 +3805,13 @@ function jschecks() {
 				mkdir -p .tmp/sourcemapper/secrets
 				for i in $(cat js/js_secrets.txt | cut -d' ' -f2); do wget -q -P .tmp/sourcemapper/secrets $i; done
 				trufflehog filesystem .tmp/sourcemapper/ -j 2>/dev/null | jq -c | anew -q js/js_secrets_jsmap.txt
-				find .tmp/sourcemapper/ -type f -name "*.js" | jsluice secrets -j --patterns=~/Tools/jsluice_patterns.json | anew -q js/js_secrets_jsmap_jsluice.txt
+				PATTERNS_FILE="$HOME/Tools/jsluice_patterns.json"
+				if [[ -r "$PATTERNS_FILE" ]]; then
+					find .tmp/sourcemapper/ -type f -name "*.js" | jsluice secrets -j --patterns "$PATTERNS_FILE" | anew -q js/js_secrets_jsmap_jsluice.txt
+				else
+					printf "%b[!] jsluice patterns file not found at %s, skipping secrets scan.%b\n" "$bred" "$PATTERNS_FILE" "$reset"
+				fi
+				
 			fi
 
 			printf "%bRunning: Building wordlist 6/6%b\n" "$yellow" "$reset"
@@ -4593,25 +4610,30 @@ function command_injection() {
 
 	# Check if the function should run
 	if { [[ ! -f "$called_fn_dir/.${FUNCNAME[0]}" ]] || [[ $DIFF == true ]]; } && [[ $COMM_INJ == true ]] &&
-		[[ -s "gf/rce.txt" ]] && ! [[ $domain =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		{ [[ -s "gf/rce.txt" ]] || [[ -s "gf/cmdi.txt" ]]; } && ! [[ $domain =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 
 		start_func "${FUNCNAME[0]}" "Command Injection Checks"
 
 		# Ensure gf/rce.txt is not empty and process it
-		if [[ -s "gf/rce.txt" ]]; then
+		if [[ -s "gf/rce.txt" ]] || [[ -s "gf/cmdi.txt" ]]; then
 			printf "${yellow}\n[$(date +'%Y-%m-%d %H:%M:%S')] Running: Command Injection Payload Generation${reset}\n\n"
 
-			# Process rce.txt with qsreplace and filter lines containing 'FUZZ'
-			qsreplace "FUZZ" <"gf/rce.txt" | sed '/FUZZ/!d' | anew -q ".tmp/tmp_rce.txt"
+        	# Gather all CI candidates (RCE + CMDI) into one list
+        	> .tmp/ci_targets.txt
+            [[ -s "gf/rce.txt" ]]  && cat gf/rce.txt  >> .tmp/ci_targets.txt
+            [[ -s "gf/cmdi.txt" ]] && cat gf/cmdi.txt >> .tmp/ci_targets.txt
 
-			# Determine whether to proceed based on DEEP flag or number of URLs
-			URL_COUNT=$(wc -l <".tmp/tmp_rce.txt")
+            # Inject FUZZ marker into every target
+            qsreplace "FUZZ" < .tmp/ci_targets.txt | sed '/FUZZ/!d' > .tmp/tmp_ci.txt
+
+        # Recount for DEEP limits
+        URL_COUNT=$(wc -l <".tmp/tmp_ci.txt")
 			if [[ $DEEP == true ]] || [[ $URL_COUNT -le $DEEP_LIMIT ]]; then
 
 				# Run Commix if enabled
-				if [[ $SQLMAP == true ]]; then
+				if [[ $COMM_INJ == true ]]; then
 					printf "${yellow}\n[$(date +'%Y-%m-%d %H:%M:%S')] Running: Commix for Command Injection Checks${reset}\n\n"
-					commix --batch -m ".tmp/tmp_rce.txt" --output-dir "vulns/command_injection" 2>>"$LOGFILE" >/dev/null
+					commix --batch -m ".tmp/tmp_ci.txt" --output-dir "vulns/command_injection" 2>>"$LOGFILE" >/dev/null
 				fi
 
 				# Additional tools can be integrated here (e.g., Ghauri, sqlmap)
@@ -4854,23 +4876,16 @@ function webcache() {
 
 			printf "${yellow}\n[$(date +'%Y-%m-%d %H:%M:%S')] Running: Web Cache Poisoning Checks${reset}\n\n"
 
-			# Navigate to Web-Cache-Vulnerability-Scanner tool directory
-			if ! pushd "${tools}/Web-Cache-Vulnerability-Scanner" >/dev/null; then
-				printf "%b[!] Failed to navigate to Web-Cache-Vulnerability-Scanner directory.%b\n" "$bred" "$reset"
-				end_func "Failed to navigate to Web-Cache-Vulnerability-Scanner directory during Web Cache Poisoning Checks." "${FUNCNAME[0]}"
-				return 1
-			fi
+			# Ensure the global binary is installed
+    		if ! command -v Web-Cache-Vulnerability-Scanner >/dev/null; then
+        		printf "%b[!] Web-Cache-Vulnerability-Scanner not found in your PATH.%b\n" "$bred" "$reset"
+        		end_func "Web Cache Poisoning Checks failed: scanner not installed." "${FUNCNAME[0]}"
+        		return 1
+    		fi
 
 			# Run the Web-Cache-Vulnerability-Scanner
 			Web-Cache-Vulnerability-Scanner -u "file:$dir/webs/webs_all.txt" -v 0 2>>"$LOGFILE" |
 				anew -q "$dir/.tmp/webcache.txt"
-
-			# Return to the original directory
-			if ! popd >/dev/null; then
-				printf "%b[!] Failed to return to the original directory.%b\n" "$bred" "$reset"
-				end_func "Failed to return to the original directory during Web Cache Poisoning Checks." "${FUNCNAME[0]}"
-				return 1
-			fi
 
 			# Append unique findings to vulns/webcache.txt
 			if [[ -s "$dir/.tmp/webcache.txt" ]]; then

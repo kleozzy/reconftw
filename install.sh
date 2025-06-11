@@ -99,7 +99,7 @@ declare -A pipxtools=(
 	["xnLinkFinder"]="xnl-h4ck3r/xnLinkFinder"
 	["xnldorker"]="xnl-h4ck3r/xnldorker"
 	["porch-pirate"]="MandConsultingGroup/porch-pirate"
-	["p1radup"]="iambouali/p1radup"
+	["p1radup"]="kleozzy/p1radup"
 	["subwiz"]="hadriansecurity/subwiz"
 )
 
